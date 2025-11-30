@@ -92,6 +92,11 @@ pub fn connect(path: PathBuf) -> Result<rusqlite::Connection, Error> {
     return Ok(conn);
 }
 
+struct Path {
+    path: PathBuf,
+    tempdir: Option<tempfile::TempDir>,
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::registry()
@@ -99,36 +104,75 @@ async fn main() {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let start = Instant::now();
-
-    let tasks: Vec<_> = (0..64)
+    let use_graft = true;
+    let paths: Vec<Path> = (0..64)
         .map(|_| {
-            tokio::spawn(async {
-                let use_graft = true;
-                let c = if use_graft {
-                    let tag = Alphanumeric.sample_string(&mut rand::rng(), 16);
-                    connect(format!("file:{tag}?vfs=graft").into()).unwrap()
-                } else {
-                    let tmp_dir = tempfile::TempDir::new().unwrap();
-                    connect(
-                        format!("file:{}/main.db?vfs=unix", tmp_dir.path().to_string_lossy())
-                            .into(),
-                    )
-                    .unwrap()
-                };
-
-                c.execute("CREATE TABLE test (id INTEGER PRIMARY KEY) STRICT", ())
-                    .unwrap();
-
-                for i in 0..50000 {
-                    c.execute("INSERT INTO test (id) VALUES (?1)", (i,))
-                        .unwrap();
+            if use_graft {
+                let tag = Alphanumeric.sample_string(&mut rand::rng(), 16);
+                Path {
+                    path: PathBuf::from(format!("file:{tag}?vfs=graft")),
+                    tempdir: None,
                 }
-            })
+            } else {
+                let tmp_dir = tempfile::TempDir::new().unwrap();
+                Path {
+                    path: PathBuf::from(format!(
+                        "file:{}/main.db?vfs=unix",
+                        tmp_dir.path().to_string_lossy()
+                    )),
+                    tempdir: Some(tmp_dir),
+                }
+            }
         })
         .collect();
 
-    futures::future::join_all(tasks).await;
+    {
+        let start = Instant::now();
+        let tasks: Vec<_> = paths
+            .iter()
+            .map(|p| {
+                let path = p.path.clone();
+                tokio::spawn(async {
+                    let c = connect(path).unwrap();
 
-    println!("Done, done, done: {:?}", Instant::now() - start);
+                    c.execute("CREATE TABLE test (id INTEGER PRIMARY KEY) STRICT", ())
+                        .unwrap();
+
+                    for i in 0..20000 {
+                        c.execute("INSERT INTO test (id) VALUES (?1)", (i,))
+                            .unwrap();
+                    }
+                })
+            })
+            .collect();
+
+        futures::future::join_all(tasks).await;
+        println!("Written: {:?}", Instant::now() - start);
+    }
+
+    {
+        let start = Instant::now();
+        let tasks: Vec<_> = paths
+            .iter()
+            .map(|p| {
+                let path = p.path.clone();
+                tokio::spawn(async {
+                    let c = connect(path).unwrap();
+
+                    for _ in 0..2 {
+                        for i in 0..20000 {
+                            c.query_row("SELECT id FROM test WHERE id = ?1", (i,), |row| {
+                                row.get::<_, i64>(0)
+                            })
+                            .unwrap();
+                        }
+                    }
+                })
+            })
+            .collect();
+
+        futures::future::join_all(tasks).await;
+
+        println!("Reads: {:?}", Instant::now() - start);
+    }
 }
