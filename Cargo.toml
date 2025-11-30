@@ -1,0 +1,18 @@
+[package]
+name = "grafty"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+base64 = "0.22.1"
+futures = "0.3.31"
+graft-kernel = { git = "https://github.com/ignatz/graft.git" }
+graft-sqlite = { git = "https://github.com/ignatz/graft.git", features = ["register-static"] }
+log = "0.4.28"
+rand = "0.9.2"
+rusqlite = { version = "0.37.0", default-features = false, features = ["bundled", "column_decltype", "functions", "preupdate_hook"] }
+tempfile = "3.23.0"
+thiserror = "2.0.17"
+tokio = { version = "^1.38.0", features = ["rt-multi-thread", "macros"] }
+tracing-subscriber = "0.3.22"
+url = "2.5.7"
